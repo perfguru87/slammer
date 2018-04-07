@@ -49,6 +49,12 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Check the database connection
+	err = db.Ping()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	// Declare the channel we'll be using as a work queue
 	inputChan := make(chan (string))
 	// Declare the channel that will gather results
