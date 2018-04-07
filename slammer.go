@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"strconv"
 	"sync"
 	"time"
 
@@ -35,6 +36,28 @@ type result struct {
 	dbTime    time.Duration
 	workCount int
 	errors    int
+}
+
+var format = "%10s  %20s  %20s  %10s %4s  %10s %4s   %16s\n"
+
+func print_separator(c string) {
+	fmt.Printf("%s\n", strings.Repeat(c, 120))
+}
+
+func print_header() {
+	print_separator("=")
+	fmt.Printf(format, "", "Wall time (s)", "DB time (s)", "Requests", "%%", "Errors", "%%", "Requests/sec")
+	print_separator("-")
+}
+
+func print_row(title string, r result, total result) {
+	wall_dur := r.end.Sub(r.start)
+	fmt.Printf(format, title,
+			strconv.FormatFloat(wall_dur.Seconds(), 'f', 3, 32),
+			strconv.FormatFloat(r.dbTime.Seconds(), 'f', 3, 32),
+			strconv.Itoa(r.workCount), strconv.Itoa(int(100 * float64(r.workCount)/float64(total.workCount))),
+			strconv.Itoa(r.errors), strconv.Itoa(int(100 * float64(r.errors)/float64(total.workCount))),
+			strconv.FormatFloat(float64(r.workCount)/float64(wall_dur.Seconds()), 'f', 2, 64))
 }
 
 func main() {
@@ -66,15 +89,19 @@ func main() {
 	var wg sync.WaitGroup
 	wg.Add(cfg.workers)
 
+	var total result
+
 	// Start the pool of workers up, reading from the channel
-	totalStart := time.Now()
+	total.start = time.Now()
+	fmt.Printf("Current date: %s\n", total.start.Format("2006-01-02 15:04:05"))
+	fmt.Printf("Running the slammer...\n\n")
+
 	startWorkers(cfg.workers, inputChan, outputChan, db, &wg, cfg.pauseInterval, cfg.debugMode, cfg.loops)
 
 	// Warm up error and line so I can use error in the for loop with running into
 	// a shadowing issue
 	err = nil
 	line := ""
-	totalWorkCount := 0
 	// Read from STDIN in the main thread
 	input := bufio.NewReader(os.Stdin)
 	for err != io.EOF {
@@ -84,7 +111,7 @@ func main() {
 			line = strings.TrimRight(line, "\r\n")
 			// Push that onto the work queue
 			inputChan <- line
-			totalWorkCount += cfg.loops
+			total.workCount += cfg.loops
 		} else if cfg.debugMode {
 			log.Println(err)
 		}
@@ -97,28 +124,19 @@ func main() {
 	// debug or error messages from the workers. The waitgroup semaphore prevents this
 	// even though it probably looks redundant
 	wg.Wait()
-	totalEnd := time.Now()
-	wallTime := totalEnd.Sub(totalStart)
+	total.end = time.Now()
 	// Collect all results, report them. This will block and wait until all results
 	// are in
-	fmt.Println("Slammer Status:")
-	totalErrors := 0
-	var totalDbTime time.Duration
+	print_header()
 	for i := 0; i < cfg.workers; i++ {
 		r := <-outputChan
-		workerDuration := r.end.Sub(r.start)
-		totalErrors += r.errors
-		totalDbTime += r.dbTime
-		fmt.Printf("---- Worker #%d ----\n", i)
-		fmt.Printf("  Started at %s , Ended at %s, Wall time %s, DB time %s\n", r.start.Format("2006-01-02 15:04:05"), r.end.Format("2006-01-02 15:04:05"), workerDuration.String(), r.dbTime)
-		fmt.Printf("  Units of work: %d, Percentage work: %f, Average work over DB time: %f\n", r.workCount, float64(r.workCount)/float64(totalWorkCount), float64(r.workCount)/float64(r.dbTime))
-		fmt.Printf("  Errors: %d , Percentage errors: %f, Average errors per second: %f\n", r.errors, float64(r.errors)/float64(r.workCount), float64(r.errors)/workerDuration.Seconds())
+		total.errors += r.errors
+		total.dbTime += r.dbTime
+		print_row("worker#" + strconv.Itoa(i), r, total)
 	}
-	// TODO work on improving what we report here
-	fmt.Printf("---- Overall ----\n")
-	fmt.Printf("  Started at %s , Ended at %s, Wall time %s, DB time %s\n", totalStart.Format("2006-01-02 15:04:05"), totalEnd.Format("2006-01-02 15:04:05"), wallTime, totalDbTime)
-	fmt.Printf("  Units of work: %d, Average work over DB time: %f\n", totalWorkCount, float64(totalWorkCount)/float64(totalDbTime))
-	fmt.Printf("  Errors: %d, Percentage errors: %f\n", totalErrors, float64(totalErrors)/float64(totalWorkCount))
+	print_separator("-")
+	print_row("Overall", total, total)
+
 	// Lets just be nice and tidy
 	close(outputChan)
 }
