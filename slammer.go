@@ -132,7 +132,7 @@ func main() {
 		r := <-outputChan
 		total.errors += r.errors
 		total.dbTime += r.dbTime
-		print_row("worker#" + strconv.Itoa(i), r, total)
+		print_row("worker#" + strconv.Itoa(i + 1), r, total)
 	}
 	print_separator("-")
 	print_row("Overall", total, total)
