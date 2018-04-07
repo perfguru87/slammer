@@ -39,6 +39,18 @@ The command accepts several arguments:
 * w - The size of the worker pool. This defaults to 1, and cannot be lower than 1.
 * d - Debug mode. Enable this to see errors logged to STDERR as they happen
 
+MySQL connection example:
+
+```bash
+slammer -c "root@tcp(127.0.0.1:3306)/my_db" -p 200us -w 2 < mysqlfile
+```
+
+PostgreSQL connection example:
+
+```bash
+slammer -db postgres -c "dbname=test sslmode=disable user=postgres" ...
+```
+
 ## Example
 
 ```bash
