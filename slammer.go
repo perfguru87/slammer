@@ -26,6 +26,7 @@ type config struct {
 	pauseInterval time.Duration
 	workers       int
 	debugMode     bool
+	loops         int
 }
 
 type result struct {
@@ -67,7 +68,7 @@ func main() {
 
 	// Start the pool of workers up, reading from the channel
 	totalStart := time.Now()
-	startWorkers(cfg.workers, inputChan, outputChan, db, &wg, cfg.pauseInterval, cfg.debugMode)
+	startWorkers(cfg.workers, inputChan, outputChan, db, &wg, cfg.pauseInterval, cfg.debugMode, cfg.loops)
 
 	// Warm up error and line so I can use error in the for loop with running into
 	// a shadowing issue
@@ -83,7 +84,7 @@ func main() {
 			line = strings.TrimRight(line, "\r\n")
 			// Push that onto the work queue
 			inputChan <- line
-			totalWorkCount++
+			totalWorkCount += cfg.loops
 		} else if cfg.debugMode {
 			log.Println(err)
 		}
@@ -122,18 +123,18 @@ func main() {
 	close(outputChan)
 }
 
-func startWorkers(count int, ic <-chan string, oc chan<- result, db *sql.DB, wg *sync.WaitGroup, pause time.Duration, debugMode bool) {
+func startWorkers(count int, ic <-chan string, oc chan<- result, db *sql.DB, wg *sync.WaitGroup, pause time.Duration, debugMode bool, loops int) {
 	// Start the pool of workers up, reading from the channel
 	for i := 0; i < count; i++ {
 		// register a signal chan for handling shutdown
 		sc := make(chan os.Signal)
 		signal.Notify(sc, os.Interrupt)
 		// Pass in everything it needs
-		go startWorker(i, ic, oc, sc, db, wg, pause, debugMode)
+		go startWorker(i, ic, oc, sc, db, wg, pause, debugMode, loops)
 	}
 }
 
-func startWorker(workerNum int, ic <-chan string, oc chan<- result, sc <-chan os.Signal, db *sql.DB, done *sync.WaitGroup, pause time.Duration, debugMode bool) {
+func startWorker(workerNum int, ic <-chan string, oc chan<- result, sc <-chan os.Signal, db *sql.DB, done *sync.WaitGroup, pause time.Duration, debugMode bool, loops int) {
 	// Prep the result object
 	r := result{start: time.Now()}
 	for line := range ic {
@@ -151,20 +152,23 @@ func startWorker(workerNum int, ic <-chan string, oc chan<- result, sc <-chan os
 		default:
 			// NOOP
 		}
-		t := time.Now()
-		_, err := db.Exec(line)
-		r.dbTime += time.Since(t)
-		// TODO should this be after the err != nil? It counts towards work attempted
-		// but not work completed.
-		r.workCount++
-		if err != nil {
-			r.errors++
-			if debugMode {
-				log.Printf("Worker #%d: %s - %s", workerNum, line, err.Error())
+
+		for i := 0; i < loops; i++ {
+			t := time.Now()
+			_, err := db.Exec(line)
+			r.dbTime += time.Since(t)
+			// TODO should this be after the err != nil? It counts towards work attempted
+			// but not work completed.
+			r.workCount++
+			if err != nil {
+				r.errors++
+				if debugMode {
+					log.Printf("Worker #%d: %s - %s", workerNum, line, err.Error())
+				}
+			} else {
+				// Sleep for the configured amount of pause time between each call
+				time.Sleep(pause)
 			}
-		} else {
-			// Sleep for the configured amount of pause time between each call
-			time.Sleep(pause)
 		}
 	}
 
@@ -179,6 +183,7 @@ func getConfig() (*config, error) {
 	c := flag.String("c", "", "The connection string to use when connecting to the database")
 	db := flag.String("db", "mysql", "The database driver to load. Defaults to mysql")
 	w := flag.Int("w", 1, "The number of workers to use. A number greater than 1 will enable statements to be issued concurrently")
+	n := flag.Int("n", 1, "The number of loops to perform in each worker (default is 1)")
 	d := flag.Bool("d", false, "Debug mode - turn this on to have errors printed to the terminal")
 	// TODO support an "interactive" flag to drop you into a shell that outputs things like
 	// sparklines of the current worker throughputs
@@ -196,5 +201,5 @@ func getConfig() (*config, error) {
 		return nil, errors.New("You must provide a worker count > 0 with -w")
 	}
 
-	return &config{db: *db, connString: *c, pauseInterval: pi, workers: *w, debugMode: *d}, nil
+	return &config{db: *db, connString: *c, pauseInterval: pi, workers: *w, debugMode: *d, loops: *n}, nil
 }
